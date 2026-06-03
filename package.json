@@ -1,0 +1,12 @@
+{
+  "name": "web-services-platform",
+  "private": true,
+  "workspaces": [
+    "backend/*",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "echo \"Use docker compose up\""
+  }
+}
+
