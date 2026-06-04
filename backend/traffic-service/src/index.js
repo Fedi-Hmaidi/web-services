@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import pool, { initTrafficSchema } from './db.js';
 import { authenticate } from './auth.js';
 
+import { logEvent } from './logger.js';
+
 dotenv.config();
 
 const app = express();
@@ -32,6 +34,19 @@ app.post('/traffic/zones', authenticate, async (req, res) => {
     );
 
     const zone = result.rows[0];
+
+    logEvent({
+      log_type: 'AUDIT',
+      level: 'INFO',
+      message: `Zone de circulation créée: ${name}`,
+      module: 'traffic-service',
+      user_id: req.user.id,
+      username: req.user.username,
+      action: 'CREATE_ZONE',
+      resource: 'traffic_zones',
+      context: { zone_id: zone.id, latitude_min, latitude_max, longitude_min, longitude_max }
+    });
+
     res.status(201).json({
       ...zone,
       density: 0,
@@ -39,7 +54,13 @@ app.post('/traffic/zones', authenticate, async (req, res) => {
       is_congested: false,
     });
   } catch (error) {
-    console.error('Error creating traffic zone:', error);
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: `Erreur lors de la création de la zone ${name}`,
+      module: 'traffic-service',
+      context: error.stack
+    });
     res.status(500).json({ message: 'Erreur lors de la création de la zone de circulation' });
   }
 });
@@ -107,7 +128,13 @@ app.get('/traffic/zones', authenticate, async (_req, res) => {
 
     res.json(zones);
   } catch (error) {
-    console.error('Error getting traffic zones:', error);
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: 'Erreur lors de la récupération des zones de circulation',
+      module: 'traffic-service',
+      context: error.stack
+    });
     res.status(500).json({ message: 'Erreur lors de la récupération des zones' });
   }
 });

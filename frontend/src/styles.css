@@ -119,3 +119,43 @@ body {
     visibility: hidden;
   }
 }
+
+/* Logs specific styles */
+.log-row {
+  transition: background-color 0.2s ease;
+}
+
+.log-row:hover {
+  background-color: rgba(37, 99, 235, 0.04) !important;
+}
+
+/* Custom scrollbar for log detail dialog stack trace preview */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(100px) scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}

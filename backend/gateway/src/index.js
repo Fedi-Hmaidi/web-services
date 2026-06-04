@@ -10,6 +10,8 @@ const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://localhost:4001';
 const vehicleServiceUrl = process.env.VEHICLE_SERVICE_URL || 'http://localhost:4002';
 const trafficServiceUrl = process.env.TRAFFIC_SERVICE_URL || 'http://localhost:4003';
 const incidentServiceUrl = process.env.INCIDENT_SERVICE_URL || 'http://localhost:4004';
+const loggingServiceUrl = process.env.LOGGING_SERVICE_URL || 'http://localhost:4005';
+const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:4006';
 
 const typeDefs = `#graphql
   type User {
@@ -64,6 +66,36 @@ const typeDefs = `#graphql
     updated_at: String
   }
 
+  type Log {
+    id: ID!
+    log_type: String!
+    level: String!
+    message: String!
+    module: String!
+    user_id: ID
+    username: String
+    action: String
+    resource: String
+    context: String
+    created_at: String
+  }
+
+  type Notification {
+    id: ID!
+    user_id: ID!
+    title: String!
+    message: String!
+    type: String!
+    is_read: Boolean!
+    created_at: String!
+  }
+
+  type LogResult {
+    logs: [Log!]!
+    total: Int!
+    pages: Int!
+  }
+
   type AuthPayload {
     user: User!
     token: String!
@@ -75,6 +107,17 @@ const typeDefs = `#graphql
     vehicle(id: ID!): Vehicle
     trafficZones: [TrafficZone!]!
     incidents: [Incident!]!
+    notifications(unread: Boolean): [Notification!]!
+    logs(
+      log_type: String
+      level: String
+      module: String
+      username: String
+      action: String
+      search: String
+      page: Int
+      limit: Int
+    ): LogResult!
   }
 
   input RegisterInput {
@@ -127,6 +170,9 @@ const typeDefs = `#graphql
     createTrafficZone(input: TrafficZoneInput!): TrafficZone!
     declareIncident(input: DeclareIncidentInput!): Incident!
     updateIncidentStatus(id: ID!, status: String!): Incident!
+    markNotificationAsRead(id: ID!): Notification!
+    markAllNotificationsAsRead: Boolean!
+    broadcastAnnouncement(title: String!, message: String!): Boolean!
   }
 `;
 
@@ -172,6 +218,30 @@ const resolvers = {
     },
     incidents: async (_parent, _args, context) => {
       return requestJson(`${incidentServiceUrl}/incidents`, {
+        headers: { Authorization: context.authorization || '' },
+      });
+    },
+    notifications: async (_parent, { unread }, context) => {
+      const url = `${notificationServiceUrl}/notifications${unread ? '?unread=true' : ''}`;
+      return requestJson(url, {
+        headers: { Authorization: context.authorization || '' },
+      });
+    },
+    logs: async (_parent, args, context) => {
+      const params = new URLSearchParams();
+      if (args.log_type) params.append('log_type', args.log_type);
+      if (args.level) params.append('level', args.level);
+      if (args.module) params.append('module', args.module);
+      if (args.username) params.append('username', args.username);
+      if (args.action) params.append('action', args.action);
+      if (args.search) params.append('search', args.search);
+      if (args.page) params.append('page', args.page);
+      if (args.limit) params.append('limit', args.limit);
+
+      const queryString = params.toString();
+      const url = `${loggingServiceUrl}/logs${queryString ? '?' + queryString : ''}`;
+
+      return requestJson(url, {
         headers: { Authorization: context.authorization || '' },
       });
     },
@@ -225,6 +295,27 @@ const resolvers = {
         headers: { Authorization: context.authorization || '' },
         body: JSON.stringify({ status }),
       });
+    },
+    markNotificationAsRead: async (_parent, { id }, context) => {
+      return requestJson(`${notificationServiceUrl}/notifications/${id}/read`, {
+        method: 'PATCH',
+        headers: { Authorization: context.authorization || '' },
+      });
+    },
+    markAllNotificationsAsRead: async (_parent, _args, context) => {
+      await requestJson(`${notificationServiceUrl}/notifications/read-all`, {
+        method: 'POST',
+        headers: { Authorization: context.authorization || '' },
+      });
+      return true;
+    },
+    broadcastAnnouncement: async (_parent, { title, message }, context) => {
+      await requestJson(`${notificationServiceUrl}/notifications/announcement`, {
+        method: 'POST',
+        headers: { Authorization: context.authorization || '' },
+        body: JSON.stringify({ title, message }),
+      });
+      return true;
     },
   },
 };

@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import pool, { initAuthSchema } from './db.js';
 import { authenticate, requireRole, signToken } from './auth.js';
 
+import { logEvent } from './logger.js';
+
 dotenv.config();
 
 const app = express();
@@ -28,23 +30,52 @@ app.post('/auth/register', async (req, res) => {
     return res.status(400).json({ message: 'Role invalide' });
   }
 
-  const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-  if (existing.rows.length > 0) {
-    return res.status(409).json({ message: 'Email déjà utilisé' });
+  try {
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) {
+      logEvent({
+        log_type: 'APPLICATION',
+        level: 'WARN',
+        message: `Tentative d'inscription avec un email déjà existant: ${email}`,
+        module: 'auth-service'
+      });
+      return res.status(409).json({ message: 'Email déjà utilisé' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      `INSERT INTO users (username, email, password, role)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username, email, role, created_at`,
+      [username, email, hashedPassword, role]
+    );
+
+    const user = result.rows[0];
+    const token = signToken(user);
+
+    logEvent({
+      log_type: 'AUDIT',
+      level: 'INFO',
+      message: `Nouvel utilisateur enregistré: ${username} (${email})`,
+      module: 'auth-service',
+      user_id: user.id,
+      username: user.username,
+      action: 'REGISTER',
+      resource: 'users',
+      context: { role: user.role }
+    });
+
+    res.status(201).json({ user, token });
+  } catch (error) {
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: `Erreur lors de l'enregistrement de l'utilisateur: ${username}`,
+      module: 'auth-service',
+      context: error.stack
+    });
+    res.status(500).json({ message: 'Erreur interne du serveur' });
   }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const result = await pool.query(
-    `INSERT INTO users (username, email, password, role)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, username, email, role, created_at`,
-    [username, email, hashedPassword, role]
-  );
-
-  const user = result.rows[0];
-  const token = signToken(user);
-
-  res.status(201).json({ user, token });
 });
 
 app.post('/auth/login', async (req, res) => {
@@ -54,27 +85,63 @@ app.post('/auth/login', async (req, res) => {
     return res.status(400).json({ message: 'email et password sont requis' });
   }
 
-  const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-  const user = result.rows[0];
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = result.rows[0];
 
-  if (!user) {
-    return res.status(401).json({ message: 'Identifiants invalides' });
+    if (!user) {
+      logEvent({
+        log_type: 'APPLICATION',
+        level: 'WARN',
+        message: `Tentative de connexion avec email inexistant: ${email}`,
+        module: 'auth-service'
+      });
+      return res.status(401).json({ message: 'Identifiants invalides' });
+    }
+
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
+      logEvent({
+        log_type: 'APPLICATION',
+        level: 'WARN',
+        message: `Identifiants incorrects pour l'utilisateur: ${user.username}`,
+        module: 'auth-service',
+        user_id: user.id,
+        username: user.username
+      });
+      return res.status(401).json({ message: 'Identifiants invalides' });
+    }
+
+    const publicUser = {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      created_at: user.created_at,
+    };
+
+    logEvent({
+      log_type: 'AUDIT',
+      level: 'INFO',
+      message: `Utilisateur connecté avec succès: ${user.username}`,
+      module: 'auth-service',
+      user_id: user.id,
+      username: user.username,
+      action: 'LOGIN',
+      resource: 'users'
+    });
+
+    res.json({ user: publicUser, token: signToken(publicUser) });
+  } catch (error) {
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: `Erreur lors de l'authentification de l'utilisateur avec email ${email}`,
+      module: 'auth-service',
+      context: error.stack
+    });
+    res.status(500).json({ message: 'Erreur interne du serveur' });
   }
-
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) {
-    return res.status(401).json({ message: 'Identifiants invalides' });
-  }
-
-  const publicUser = {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    role: user.role,
-    created_at: user.created_at,
-  };
-
-  res.json({ user: publicUser, token: signToken(publicUser) });
 });
 
 app.get('/auth/profile', authenticate, async (req, res) => {

@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import pool, { initIncidentSchema } from './db.js';
 import { authenticate } from './auth.js';
 
+import { logEvent, notifyEvent } from './logger.js';
+
 dotenv.config();
 
 const app = express();
@@ -45,9 +47,36 @@ app.post('/incidents', authenticate, async (req, res) => {
       ]
     );
 
-    res.status(201).json(result.rows[0]);
+    const incident = result.rows[0];
+
+    logEvent({
+      log_type: 'AUDIT',
+      level: 'INFO',
+      message: `Nouvel incident déclaré: ${title} (${type})`,
+      module: 'incident-service',
+      user_id: req.user.id,
+      username: req.user.username,
+      action: 'DECLARE_INCIDENT',
+      resource: 'incidents',
+      context: { incident_id: incident.id, type, latitude, longitude }
+    });
+
+    notifyEvent({
+      title: `Nouvel incident signalé : ${type}`,
+      message: `${title} - ${description || 'Pas de description'}`,
+      type: 'INCIDENT',
+      roles: ['ADMIN', 'OPERATOR']
+    });
+
+    res.status(201).json(incident);
   } catch (error) {
-    console.error('Error declaring incident:', error);
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: `Erreur lors de la déclaration de l'incident ${title}`,
+      module: 'incident-service',
+      context: error.stack
+    });
     res.status(500).json({ message: 'Erreur lors de la déclaration de l\'incident' });
   }
 });
@@ -57,7 +86,13 @@ app.get('/incidents', authenticate, async (_req, res) => {
     const result = await pool.query('SELECT * FROM incidents ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (error) {
-    console.error('Error getting incidents:', error);
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: 'Erreur lors de la récupération des incidents',
+      module: 'incident-service',
+      context: error.stack
+    });
     res.status(500).json({ message: 'Erreur lors de la récupération des incidents' });
   }
 });
@@ -74,10 +109,18 @@ app.patch('/incidents/:id/status', authenticate, async (req, res) => {
   }
 
   try {
-    const check = await pool.query('SELECT id FROM incidents WHERE id = $1', [req.params.id]);
+    const check = await pool.query('SELECT id, status FROM incidents WHERE id = $1', [req.params.id]);
     if (check.rows.length === 0) {
+      logEvent({
+        log_type: 'APPLICATION',
+        level: 'WARN',
+        message: `Tentative de mise à jour d'un incident inexistant (ID: ${req.params.id})`,
+        module: 'incident-service'
+      });
       return res.status(404).json({ message: 'Incident introuvable' });
     }
+
+    const oldStatus = check.rows[0].status;
 
     const result = await pool.query(
       `UPDATE incidents 
@@ -87,9 +130,36 @@ app.patch('/incidents/:id/status', authenticate, async (req, res) => {
       [status, req.params.id]
     );
 
-    res.json(result.rows[0]);
+    const updatedIncident = result.rows[0];
+
+    logEvent({
+      log_type: 'AUDIT',
+      level: 'INFO',
+      message: `Statut de l'incident mis à jour: ID ${req.params.id} -> ${status}`,
+      module: 'incident-service',
+      user_id: req.user.id,
+      username: req.user.username,
+      action: 'UPDATE_STATUS',
+      resource: 'incidents',
+      context: { incident_id: req.params.id, old_status: oldStatus, new_status: status }
+    });
+
+    notifyEvent({
+      title: `Statut d'incident mis à jour`,
+      message: `L'incident '${updatedIncident.title}' (${updatedIncident.type}) est maintenant '${status}'.`,
+      type: 'INCIDENT',
+      roles: ['ADMIN', 'OPERATOR']
+    });
+
+    res.json(updatedIncident);
   } catch (error) {
-    console.error('Error updating incident status:', error);
+    logEvent({
+      log_type: 'APPLICATION',
+      level: 'ERROR',
+      message: `Erreur lors de la mise à jour du statut de l'incident ${req.params.id}`,
+      module: 'incident-service',
+      context: error.stack
+    });
     res.status(500).json({ message: 'Erreur lors de la mise à jour du statut de l\'incident' });
   }
 });

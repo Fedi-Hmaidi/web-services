@@ -20,6 +20,24 @@ import {
   InputLabel,
   CardActions,
   LinearProgress,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton,
+  Badge,
+  Popover,
+  List,
+  ListItem,
+  ListItemText,
+  Divider,
+  Tooltip,
 } from '@mui/material';
 import {
   Warning as WarningIcon,
@@ -30,6 +48,13 @@ import {
   Build as BuildIcon,
   Block as BlockIcon,
   HelpOutline as UnknownIcon,
+  Visibility as EyeIcon,
+  Close as CloseIcon,
+  Notifications as NotificationsIcon,
+  NotificationsActive as NotificationsActiveIcon,
+  VolumeUp as AnnouncementIcon,
+  ErrorOutline as SystemIcon,
+  MailOutline as GeneralIcon,
 } from '@mui/icons-material';
 
 // --- GraphQL Operations ---
@@ -177,11 +202,172 @@ const DASHBOARD_QUERY = gql`
   }
 `;
 
+const NOTIFICATIONS_QUERY = gql`
+  query GetNotifications($unread: Boolean) {
+    notifications(unread: $unread) {
+      id
+      user_id
+      title
+      message
+      type
+      is_read
+      created_at
+    }
+  }
+`;
+
+const MARK_READ_MUTATION = gql`
+  mutation MarkRead($id: ID!) {
+    markNotificationAsRead(id: $id) {
+      id
+      is_read
+    }
+  }
+`;
+
+const MARK_ALL_READ_MUTATION = gql`
+  mutation MarkAllRead {
+    markAllNotificationsAsRead
+  }
+`;
+
+const BROADCAST_MUTATION = gql`
+  mutation Broadcast($title: String!, $message: String!) {
+    broadcastAnnouncement(title: $title, message: $message)
+  }
+`;
+
 // --- Components ---
+
+function getNotificationIcon(type) {
+  switch (type) {
+    case 'INCIDENT':
+      return <IncidentIcon sx={{ color: '#ef4444' }} />;
+    case 'TRAFFIC':
+      return <TrafficIcon sx={{ color: '#f59e0b' }} />;
+    case 'VEHICLE':
+      return <CarIcon sx={{ color: '#3b82f6' }} />;
+    case 'SYSTEM':
+      return <WarningIcon sx={{ color: '#ec4899' }} />;
+    case 'ANNOUNCEMENT':
+      return <AnnouncementIcon sx={{ color: '#10b981' }} />;
+    default:
+      return <GeneralIcon sx={{ color: '#6b7280' }} />;
+  }
+}
 
 function Layout({ children }) {
   const navigate = useNavigate();
   const token = localStorage.getItem('token');
+  const userStr = localStorage.getItem('user');
+  const user = userStr ? JSON.parse(userStr) : null;
+  const isAdmin = user && user.role === 'ADMIN';
+
+  const [notifications, setNotifications] = React.useState([]);
+  const [unreadCount, setUnreadCount] = React.useState(0);
+  const [anchorEl, setAnchorEl] = React.useState(null);
+  const [toast, setToast] = React.useState(null);
+
+  // Announcement dialog state
+  const [announcementOpen, setAnnouncementOpen] = React.useState(false);
+  const [annTitle, setAnnTitle] = React.useState('');
+  const [annMsg, setAnnMsg] = React.useState('');
+
+  const { data, refetch } = useQuery(NOTIFICATIONS_QUERY, {
+    variables: { unread: false },
+    skip: !token,
+    fetchPolicy: 'network-only',
+  });
+
+  const [markRead] = useMutation(MARK_READ_MUTATION);
+  const [markAllRead] = useMutation(MARK_ALL_READ_MUTATION);
+  const [broadcast] = useMutation(BROADCAST_MUTATION);
+
+  React.useEffect(() => {
+    if (data && data.notifications) {
+      setNotifications(data.notifications);
+      setUnreadCount(data.notifications.filter(n => !n.is_read).length);
+    }
+  }, [data]);
+
+  // WebSocket Connection for Real-Time notifications
+  React.useEffect(() => {
+    if (!token) return;
+
+    const wsUrl = `ws://localhost:4006/?token=${token}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.event === 'notification') {
+          const newNotif = payload.data;
+          
+          setNotifications(prev => [newNotif, ...prev]);
+          setUnreadCount(prev => prev + 1);
+          
+          // Display Toast
+          setToast(newNotif);
+          setTimeout(() => setToast(null), 5000);
+        }
+      } catch (err) {
+        console.error('Error parsing WS message:', err);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('WS Connection closed, retrying in 5 seconds...');
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [token]);
+
+  const handleMarkAsRead = async (id, e) => {
+    e.stopPropagation();
+    try {
+      await markRead({ variables: { id } });
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await markAllRead();
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setUnreadCount(0);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleBroadcast = async (e) => {
+    e.preventDefault();
+    if (!annTitle || !annMsg) return;
+    try {
+      await broadcast({ variables: { title: annTitle, message: annMsg } });
+      setAnnouncementOpen(false);
+      setAnnTitle('');
+      setAnnMsg('');
+      if (refetch) refetch();
+    } catch (err) {
+      alert(err.message || 'Erreur lors de la diffusion');
+    }
+  };
+
+  const handleBellClick = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleClosePopover = () => {
+    setAnchorEl(null);
+  };
+
+  const openPopover = Boolean(anchorEl);
 
   return (
     <Box className="shell">
@@ -197,8 +383,23 @@ function Layout({ children }) {
                 <Button component={Link} to="/vehicles" sx={{ fontWeight: 600 }}>Véhicules</Button>
                 <Button component={Link} to="/traffic-zones" sx={{ fontWeight: 600 }}>Zones Trafic</Button>
                 <Button component={Link} to="/incidents" sx={{ fontWeight: 600 }}>Incidents</Button>
+                {isAdmin && (
+                  <>
+                    <Button onClick={() => setAnnouncementOpen(true)} color="success" sx={{ fontWeight: 600 }}>Annonce</Button>
+                    <Button component={Link} to="/logs" color="secondary" sx={{ fontWeight: 700 }}>Log Admin</Button>
+                  </>
+                )}
               </>
             )}
+            
+            {token && (
+              <IconButton color="inherit" onClick={handleBellClick} sx={{ mr: 1 }}>
+                <Badge badgeContent={unreadCount} color="error">
+                  {unreadCount > 0 ? <NotificationsActiveIcon color="primary" /> : <NotificationsIcon />}
+                </Badge>
+              </IconButton>
+            )}
+
             {!token ? (
               <>
                 <Button component={Link} to="/login" variant="outlined">Login</Button>
@@ -221,6 +422,179 @@ function Layout({ children }) {
         </Toolbar>
       </AppBar>
       <Container sx={{ py: 4 }}>{children}</Container>
+
+      {/* Popover Notifications */}
+      <Popover
+        open={openPopover}
+        anchorEl={anchorEl}
+        onClose={handleClosePopover}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'right',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'right',
+        }}
+        PaperProps={{
+          sx: {
+            mt: 1.5,
+            width: 380,
+            maxHeight: 480,
+            overflow: 'auto',
+            background: 'rgba(255, 255, 255, 0.92)',
+            backdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            borderRadius: '16px',
+            boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.15)',
+          }
+        }}
+      >
+        <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Typography variant="h6" sx={{ fontWeight: 800 }}>Notifications</Typography>
+          {unreadCount > 0 && (
+            <Button size="small" onClick={handleMarkAllAsRead} sx={{ fontWeight: 600 }}>
+              Tout lire
+            </Button>
+          )}
+        </Box>
+        <Divider />
+        <List sx={{ p: 0 }}>
+          {notifications.length === 0 ? (
+            <ListItem sx={{ py: 3 }}>
+              <ListItemText
+                primary="Aucune notification"
+                primaryTypographyProps={{ align: 'center', color: 'text.secondary' }}
+              />
+            </ListItem>
+          ) : (
+            notifications.map((notif) => (
+              <React.Fragment key={notif.id}>
+                <ListItem
+                  alignItems="flex-start"
+                  sx={{
+                    backgroundColor: notif.is_read ? 'transparent' : 'rgba(37, 99, 235, 0.05)',
+                    transition: 'background-color 0.2s',
+                    py: 1.5,
+                  }}
+                  secondaryAction={
+                    !notif.is_read && (
+                      <Tooltip title="Marquer comme lu">
+                        <IconButton size="small" onClick={(e) => handleMarkAsRead(notif.id, e)}>
+                          <CloseIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )
+                  }
+                >
+                  <Box sx={{ mr: 2, mt: 0.5 }}>
+                    {getNotificationIcon(notif.type)}
+                  </Box>
+                  <ListItemText
+                    primary={notif.title}
+                    secondary={
+                      <React.Fragment>
+                        <Typography
+                          sx={{ display: 'inline', fontWeight: notif.is_read ? 400 : 600 }}
+                          component="span"
+                          variant="body2"
+                          color="text.primary"
+                        >
+                          {notif.message}
+                        </Typography>
+                        <Typography
+                          sx={{ display: 'block', mt: 0.5, fontSize: '0.75rem', opacity: 0.7 }}
+                          component="span"
+                          variant="caption"
+                          color="text.secondary"
+                        >
+                          {new Date(notif.created_at || Date.now()).toLocaleTimeString()} - {new Date(notif.created_at || Date.now()).toLocaleDateString()}
+                        </Typography>
+                      </React.Fragment>
+                    }
+                    primaryTypographyProps={{
+                      fontWeight: notif.is_read ? 600 : 800,
+                      color: notif.is_read ? 'text.secondary' : 'text.primary',
+                    }}
+                  />
+                </ListItem>
+                <Divider component="li" />
+              </React.Fragment>
+            ))
+          )}
+        </List>
+      </Popover>
+
+      {/* Floating Toast Notification */}
+      {toast && (
+        <Box
+          sx={{
+            position: 'fixed',
+            bottom: 24,
+            right: 24,
+            width: 320,
+            zIndex: 9999,
+            p: 2,
+            background: 'rgba(15, 23, 42, 0.95)',
+            color: '#fff',
+            backdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '12px',
+            boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.3)',
+            animation: 'slideIn 0.3s ease-out',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
+            {getNotificationIcon(toast.type)}
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#fff' }}>
+              {toast.title}
+            </Typography>
+            <IconButton
+              size="small"
+              onClick={() => setToast(null)}
+              sx={{ ml: 'auto', color: 'rgba(255,255,255,0.6)' }}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.85)', wordBreak: 'break-word' }}>
+            {toast.message}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Announcement Dialog */}
+      <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Diffuser une annonce globale</DialogTitle>
+        <DialogContent>
+          <Box component="form" onSubmit={handleBroadcast} sx={{ display: 'grid', gap: 2, mt: 1 }}>
+            <TextField
+              label="Titre de l'annonce"
+              value={annTitle}
+              onChange={(e) => setAnnTitle(e.target.value)}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Message"
+              value={annMsg}
+              onChange={(e) => setAnnMsg(e.target.value)}
+              multiline
+              rows={3}
+              fullWidth
+              required
+            />
+            <DialogActions sx={{ px: 0, pb: 0, mt: 1 }}>
+              <Button onClick={() => setAnnouncementOpen(false)}>Annuler</Button>
+              <Button type="submit" variant="contained" color="success">
+                Diffuser
+              </Button>
+            </DialogActions>
+          </Box>
+        </DialogContent>
+      </Dialog>
     </Box>
   );
 }
@@ -827,9 +1201,390 @@ function IncidentsPage() {
   );
 }
 
+const LOGS_QUERY = gql`
+  query GetLogs(
+    $log_type: String
+    $level: String
+    $module: String
+    $username: String
+    $action: String
+    $search: String
+    $page: Int
+    $limit: Int
+  ) {
+    logs(
+      log_type: $log_type
+      level: $level
+      module: $module
+      username: $username
+      action: $action
+      search: $search
+      page: $page
+      limit: $limit
+    ) {
+      logs {
+        id
+        log_type
+        level
+        message
+        module
+        user_id
+        username
+        action
+        resource
+        context
+        created_at
+      }
+      total
+      pages
+    }
+  }
+`;
+
+function LogsPage() {
+  const [logType, setLogType] = useState('');
+  const [level, setLevel] = useState('');
+  const [moduleName, setModuleName] = useState('');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [limit] = useState(10);
+  
+  const [selectedLog, setSelectedLog] = useState(null);
+
+  const { data, loading } = useQuery(LOGS_QUERY, {
+    variables: {
+      log_type: logType || null,
+      level: level || null,
+      module: moduleName || null,
+      search: search || null,
+      page,
+      limit,
+    },
+    fetchPolicy: 'network-only',
+  });
+
+  const getLevelColor = (lvl) => {
+    switch (lvl) {
+      case 'ERROR': return 'error';
+      case 'WARN': return 'warning';
+      case 'INFO': return 'info';
+      case 'DEBUG': return 'default';
+      default: return 'default';
+    }
+  };
+
+  const formatContext = (ctx) => {
+    if (!ctx) return 'Aucun contexte.';
+    try {
+      const parsed = JSON.parse(ctx);
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      return ctx;
+    }
+  };
+
+  const handleSearchChange = (e) => {
+    setSearch(e.target.value);
+    setPage(1);
+  };
+
+  const handleFilterChange = (setter) => (e) => {
+    setter(e.target.value);
+    setPage(1);
+  };
+
+  return (
+    <Box>
+      <Paper className="panel" sx={{ mb: 4 }}>
+        <Typography variant="h4" sx={{ fontWeight: 800, mb: 3 }}>
+          Centre d'Administration des Logs
+        </Typography>
+
+        {/* Filters */}
+        <Grid container spacing={2} sx={{ mb: 3 }}>
+          <Grid item xs={12} sm={3}>
+            <TextField
+              label="Rechercher..."
+              variant="outlined"
+              fullWidth
+              value={search}
+              onChange={handleSearchChange}
+              placeholder="Message, utilisateur, action..."
+            />
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <FormControl fullWidth>
+              <InputLabel>Type de Log</InputLabel>
+              <Select
+                value={logType}
+                label="Type de Log"
+                onChange={handleFilterChange(setLogType)}
+              >
+                <MenuItem value="">Tous</MenuItem>
+                <MenuItem value="APPLICATION">APPLICATION</MenuItem>
+                <MenuItem value="AUDIT">AUDIT</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <FormControl fullWidth>
+              <InputLabel>Niveau</InputLabel>
+              <Select
+                value={level}
+                label="Niveau"
+                onChange={handleFilterChange(setLevel)}
+              >
+                <MenuItem value="">Tous</MenuItem>
+                <MenuItem value="DEBUG">DEBUG</MenuItem>
+                <MenuItem value="INFO">INFO</MenuItem>
+                <MenuItem value="WARN">WARN</MenuItem>
+                <MenuItem value="ERROR">ERROR</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <FormControl fullWidth>
+              <InputLabel>Module</InputLabel>
+              <Select
+                value={moduleName}
+                label="Module"
+                onChange={handleFilterChange(setModuleName)}
+              >
+                <MenuItem value="">Tous</MenuItem>
+                <MenuItem value="auth-service">auth-service</MenuItem>
+                <MenuItem value="vehicle-service">vehicle-service</MenuItem>
+                <MenuItem value="traffic-service">traffic-service</MenuItem>
+                <MenuItem value="incident-service">incident-service</MenuItem>
+                <MenuItem value="gateway">gateway</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+        </Grid>
+
+        {/* Logs Table */}
+        {loading ? (
+          <LinearProgress />
+        ) : (
+          <TableContainer component={Paper} sx={{ background: 'transparent', boxShadow: 'none' }}>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 700 }}>Horodatage</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Niveau</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Module</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Message</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Acteur / Action</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Détails</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(!data || !data.logs || data.logs.logs.length === 0) ? (
+                  <TableRow>
+                    <TableCell colSpan={7} align="center">
+                      Aucun log trouvé.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  data.logs.logs.map((log) => (
+                    <TableRow key={log.id} hover>
+                      <TableCell>{new Date(Number(log.created_at)).toLocaleString()}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={log.log_type}
+                          size="small"
+                          color={log.log_type === 'AUDIT' ? 'secondary' : 'default'}
+                          variant="outlined"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={log.level}
+                          size="small"
+                          color={getLevelColor(log.level)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                          {log.module}
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {log.message}
+                      </TableCell>
+                      <TableCell>
+                        {log.log_type === 'AUDIT' ? (
+                          <Box>
+                            <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>
+                              {log.username || `ID: ${log.user_id}`}
+                            </Typography>
+                            <Chip label={log.action} size="small" variant="outlined" color="primary" sx={{ fontSize: '0.7rem', height: 20 }} />
+                          </Box>
+                        ) : (
+                          <Typography variant="caption" color="text.disabled">N/A</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <IconButton onClick={() => setSelectedLog(log)} color="primary" size="small">
+                          <EyeIcon />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+
+        {/* Pagination */}
+        {data && data.logs && data.logs.pages > 1 && (
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3 }}>
+            <Typography variant="body2" color="text.secondary">
+              Page {page} sur {data.logs.pages} ({data.logs.total} logs au total)
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                variant="outlined"
+                disabled={page === 1}
+                onClick={() => setPage(prev => Math.max(prev - 1, 1))}
+              >
+                Précédent
+              </Button>
+              <Button
+                variant="outlined"
+                disabled={page === data.logs.pages}
+                onClick={() => setPage(prev => Math.min(prev + 1, data.logs.pages))}
+              >
+                Suivant
+              </Button>
+            </Box>
+          </Box>
+        )}
+      </Paper>
+
+      {/* Detail Dialog */}
+      <Dialog
+        open={!!selectedLog}
+        onClose={() => setSelectedLog(null)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: '20px',
+            background: 'rgba(255, 255, 255, 0.95)',
+            backdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            boxShadow: '0 24px 60px rgba(0, 0, 0, 0.15)',
+          }
+        }}
+      >
+        {selectedLog && (
+          <>
+            <DialogTitle sx={{ m: 0, p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(0, 0, 0, 0.05)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="h6" sx={{ fontWeight: 800 }}>Détails du Log</Typography>
+                <Chip label={`ID: ${selectedLog.id}`} size="small" variant="outlined" />
+              </Box>
+              <IconButton onClick={() => setSelectedLog(null)}>
+                <CloseIcon />
+              </IconButton>
+            </DialogTitle>
+            <DialogContent dividers sx={{ p: 3 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={4}>
+                  <Typography variant="caption" color="text.disabled">Horodatage</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{new Date(Number(selectedLog.created_at)).toLocaleString()}</Typography>
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <Typography variant="caption" color="text.disabled">Type de Log</Typography>
+                  <Box sx={{ mt: 0.5 }}>
+                    <Chip label={selectedLog.log_type} color={selectedLog.log_type === 'AUDIT' ? 'secondary' : 'default'} />
+                  </Box>
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <Typography variant="caption" color="text.disabled">Niveau de Sévérité</Typography>
+                  <Box sx={{ mt: 0.5 }}>
+                    <Chip label={selectedLog.level} color={getLevelColor(selectedLog.level)} />
+                  </Box>
+                </Grid>
+                
+                <Grid item xs={12} sm={4}>
+                  <Typography variant="caption" color="text.disabled">Module Source</Typography>
+                  <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedLog.module}</Typography>
+                </Grid>
+
+                {selectedLog.log_type === 'AUDIT' && (
+                  <>
+                    <Grid item xs={12} sm={4}>
+                      <Typography variant="caption" color="text.disabled">Action Auditée</Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 600, color: 'primary.main' }}>{selectedLog.action}</Typography>
+                    </Grid>
+                    <Grid item xs={12} sm={4}>
+                      <Typography variant="caption" color="text.disabled">Ressource Touchée</Typography>
+                      <Typography variant="body1" sx={{ fontFamily: 'monospace' }}>{selectedLog.resource || 'N/A'}</Typography>
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <Typography variant="caption" color="text.disabled">Utilisateur Responsable</Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 600 }}>{selectedLog.username || `ID: ${selectedLog.user_id || 'N/A'}`}</Typography>
+                    </Grid>
+                  </>
+                )}
+
+                <Grid item xs={12}>
+                  <Typography variant="caption" color="text.disabled">Message du Log</Typography>
+                  <Paper variant="outlined" sx={{ p: 2, background: 'rgba(0,0,0,0.02)', borderStyle: 'dashed' }}>
+                    <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                      {selectedLog.message}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Typography variant="caption" color="text.disabled">Données de Contexte (ou Stack Trace)</Typography>
+                  <Paper
+                    variant="outlined"
+                    sx={{
+                      p: 2,
+                      background: '#1e1e1e',
+                      color: '#4fc1ff',
+                      fontFamily: 'Consolas, monospace',
+                      fontSize: '0.85rem',
+                      overflowX: 'auto',
+                      maxHeight: '250px',
+                    }}
+                  >
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                      {formatContext(selectedLog.context)}
+                    </pre>
+                  </Paper>
+                </Grid>
+              </Grid>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setSelectedLog(null)} variant="contained">Fermer</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+    </Box>
+  );
+}
+
 function RequireAuth({ children }) {
   const token = localStorage.getItem('token');
   return token ? children : <Navigate to="/login" replace />;
+}
+
+function RequireAdmin({ children }) {
+  const token = localStorage.getItem('token');
+  const userStr = localStorage.getItem('user');
+  const user = userStr ? JSON.parse(userStr) : null;
+
+  if (!token || !user || user.role !== 'ADMIN') {
+    return <Navigate to="/" replace />;
+  }
+  return children;
 }
 
 export default function App() {
@@ -861,6 +1616,14 @@ export default function App() {
             <RequireAuth>
               <IncidentsPage />
             </RequireAuth>
+          }
+        />
+        <Route
+          path="/logs"
+          element={
+            <RequireAdmin>
+              <LogsPage />
+            </RequireAdmin>
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
