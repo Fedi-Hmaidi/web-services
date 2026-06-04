@@ -11,6 +11,19 @@ const pool = new Pool({
 });
 
 export async function initAuthSchema() {
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await pool.query('SELECT 1');
+      break;
+    } catch (err) {
+      console.log(`Database not ready, retrying... (${retries} left)`);
+      retries -= 1;
+      if (retries === 0) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,

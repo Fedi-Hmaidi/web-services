@@ -8,6 +8,8 @@ dotenv.config();
 
 const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://localhost:4001';
 const vehicleServiceUrl = process.env.VEHICLE_SERVICE_URL || 'http://localhost:4002';
+const trafficServiceUrl = process.env.TRAFFIC_SERVICE_URL || 'http://localhost:4003';
+const incidentServiceUrl = process.env.INCIDENT_SERVICE_URL || 'http://localhost:4004';
 
 const typeDefs = `#graphql
   type User {
@@ -37,6 +39,31 @@ const typeDefs = `#graphql
     recorded_at: String
   }
 
+  type TrafficZone {
+    id: ID!
+    name: String!
+    latitude_min: Float!
+    latitude_max: Float!
+    longitude_min: Float!
+    longitude_max: Float!
+    density: Int!
+    classification: String!
+    is_congested: Boolean!
+    created_at: String
+  }
+
+  type Incident {
+    id: ID!
+    title: String!
+    description: String
+    type: String!
+    status: String!
+    latitude: Float
+    longitude: Float
+    created_at: String
+    updated_at: String
+  }
+
   type AuthPayload {
     user: User!
     token: String!
@@ -46,6 +73,8 @@ const typeDefs = `#graphql
     users: [User!]!
     vehicles: [Vehicle!]!
     vehicle(id: ID!): Vehicle
+    trafficZones: [TrafficZone!]!
+    incidents: [Incident!]!
   }
 
   input RegisterInput {
@@ -74,21 +103,41 @@ const typeDefs = `#graphql
     speed: Float
   }
 
+  input TrafficZoneInput {
+    name: String!
+    latitude_min: Float!
+    latitude_max: Float!
+    longitude_min: Float!
+    longitude_max: Float!
+  }
+
+  input DeclareIncidentInput {
+    title: String!
+    description: String
+    type: String!
+    latitude: Float
+    longitude: Float
+  }
+
   type Mutation {
     register(input: RegisterInput!): AuthPayload!
     login(input: LoginInput!): AuthPayload!
     createVehicle(input: VehicleInput!): Vehicle!
     addVehiclePosition(vehicleId: ID!, input: VehiclePositionInput!): VehiclePosition!
+    createTrafficZone(input: TrafficZoneInput!): TrafficZone!
+    declareIncident(input: DeclareIncidentInput!): Incident!
+    updateIncidentStatus(id: ID!, status: String!): Incident!
   }
 `;
 
 async function requestJson(url, options = {}) {
+  const { headers, ...restOptions } = options;
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...(headers || {}),
     },
-    ...options,
+    ...restOptions,
   });
 
   const data = await response.json().catch(() => ({}));
@@ -115,6 +164,16 @@ const resolvers = {
       return requestJson(`${vehicleServiceUrl}/vehicles/${id}`, {
         headers: { Authorization: context.authorization || '' },
       }).catch(() => null);
+    },
+    trafficZones: async (_parent, _args, context) => {
+      return requestJson(`${trafficServiceUrl}/traffic/zones`, {
+        headers: { Authorization: context.authorization || '' },
+      });
+    },
+    incidents: async (_parent, _args, context) => {
+      return requestJson(`${incidentServiceUrl}/incidents`, {
+        headers: { Authorization: context.authorization || '' },
+      });
     },
   },
   Mutation: {
@@ -144,6 +203,27 @@ const resolvers = {
         method: 'POST',
         headers: { Authorization: context.authorization || '' },
         body: JSON.stringify(input),
+      });
+    },
+    createTrafficZone: async (_parent, { input }, context) => {
+      return requestJson(`${trafficServiceUrl}/traffic/zones`, {
+        method: 'POST',
+        headers: { Authorization: context.authorization || '' },
+        body: JSON.stringify(input),
+      });
+    },
+    declareIncident: async (_parent, { input }, context) => {
+      return requestJson(`${incidentServiceUrl}/incidents`, {
+        method: 'POST',
+        headers: { Authorization: context.authorization || '' },
+        body: JSON.stringify(input),
+      });
+    },
+    updateIncidentStatus: async (_parent, { id, status }, context) => {
+      return requestJson(`${incidentServiceUrl}/incidents/${id}/status`, {
+        method: 'PATCH',
+        headers: { Authorization: context.authorization || '' },
+        body: JSON.stringify({ status }),
       });
     },
   },

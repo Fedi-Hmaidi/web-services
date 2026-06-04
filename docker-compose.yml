@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 12345678
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -46,6 +46,40 @@ services:
     depends_on:
       - db
 
+  traffic-service:
+    build:
+      context: ./backend/traffic-service
+    container_name: webservices-traffic
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: webservice
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: 12345678
+      JWT_SECRET: change_this_secret
+      PORT: 4003
+    ports:
+      - "4003:4003"
+    depends_on:
+      - db
+
+  incident-service:
+    build:
+      context: ./backend/incident-service
+    container_name: webservices-incident
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: webservice
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: 12345678
+      JWT_SECRET: change_this_secret
+      PORT: 4004
+    ports:
+      - "4004:4004"
+    depends_on:
+      - db
+
   gateway:
     build:
       context: ./backend/gateway
@@ -53,12 +87,16 @@ services:
     environment:
       AUTH_SERVICE_URL: http://auth-service:4001
       VEHICLE_SERVICE_URL: http://vehicle-service:4002
+      TRAFFIC_SERVICE_URL: http://traffic-service:4003
+      INCIDENT_SERVICE_URL: http://incident-service:4004
       PORT: 4000
     ports:
       - "4000:4000"
     depends_on:
       - auth-service
       - vehicle-service
+      - traffic-service
+      - incident-service
 
   frontend:
     build:
